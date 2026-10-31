@@ -356,6 +356,7 @@ return { acc, group, windows, deskScreens, browserScreens, leds, term, tv, mailS
 }
 function dropOffice(id) {
   const o = offices.get(id);
+  spookyDecor?.forget?.(o.group);
   root.remove(o.group);
   o.group.traverse(m => { if (m.isSprite) return; m.geometry?.dispose(); m.material?.map?.dispose(); });
   if (o.npc) { root.remove(o.npc.g); o.npc.lbl.remove(); }
@@ -364,19 +365,38 @@ function dropOffice(id) {
 function syncOffices() {
   const accs = accounts();
   for (const id of [...offices.keys()]) if (!accs.some(a => a.id === id)) dropOffice(id);
-  for (const a of accs) if (!offices.has(a.id)) { offices.set(a.id, buildOffice(a)); nightNow = null; }
+  for (const a of accs) if (!offices.has(a.id)) {
+    const o = buildOffice(a);
+    offices.set(a.id, o); nightNow = null;
+    spookyDecor?.decorate?.(o.group);
+  }
 }
 
 // ---------- ตัวละคร ----------
 const STATE_COLOR = { tool: '#ffc857', thinking: '#b48cff', done: '#3ddc97', asking: '#ff6b6b', away: '#6b7799' };
 const people = new Map();
 const geo = {
-  leg: new THREE.BoxGeometry(0.18, 0.5, 0.2), arm: new THREE.BoxGeometry(0.13, 0.46, 0.14),
-  body: new THREE.CapsuleGeometry(0.28, 0.32, 4, 12), head: new THREE.SphereGeometry(0.31, 20, 14),
-  hair: new THREE.SphereGeometry(0.335, 20, 10, 0, Math.PI * 2, 0, Math.PI * 0.55),
-  hand: new THREE.SphereGeometry(0.075, 8, 6), eye: new THREE.BoxGeometry(0.06, 0.08, 0.02),
+  leg: new THREE.CapsuleGeometry(0.09, 0.32, 4, 10), sleeve: new THREE.CapsuleGeometry(0.075, 0.2, 4, 10), forearm: new THREE.CapsuleGeometry(0.06, 0.16, 4, 10),
+  body: new THREE.CapsuleGeometry(0.24, 0.28, 6, 16), head: new THREE.SphereGeometry(0.34, 24, 18),
+  hair: new THREE.SphereGeometry(0.365, 24, 12, 0, Math.PI * 2, 0, Math.PI * 0.55),
+  ball: new THREE.SphereGeometry(1, 14, 10), band: new THREE.CylinderGeometry(1, 1, 1, 18), cube: new THREE.BoxGeometry(1, 1, 1),
+  spike: new THREE.ConeGeometry(0.09, 0.24, 7), collar: new THREE.TorusGeometry(0.11, 0.03, 8, 18), rim: new THREE.TorusGeometry(0.075, 0.012, 6, 18),
+  smile: new THREE.TorusGeometry(0.045, 0.011, 6, 12, Math.PI), blush: new THREE.CircleGeometry(0.045, 14),
+  hatCone: new THREE.ConeGeometry(0.25, 0.46, 14),
   ring: new THREE.RingGeometry(0.42, 0.56, 40), disc: new THREE.CircleGeometry(0.42, 40),
 };
+const blushM = new THREE.MeshBasicMaterial({ color: '#ff8fa3', transparent: true, opacity: 0.35, depthWrite: false });
+const PANTS = ['#2a3045', '#3a4a6b', '#4a3b30', '#30384f', '#54425f'], SHOES = ['#f2f3f7', '#20222b', '#8a4b2a', '#d9534f', '#3d6fb5'];
+// ชิ้นส่วนจาก geometry ใช้ซ้ำ (s = ขนาดต่อแกน)
+function piece(parent, g, m, x, y, z, sx = 1, sy = sx, sz = sx, shadow = false) {
+  const o = new THREE.Mesh(g, m); o.position.set(x, y, z); o.scale.set(sx, sy, sz); o.castShadow = shadow; parent.add(o); return o;
+}
+// กะพริบตาเป็นจังหวะ · คนที่พักอยู่หลับตา · หมวกแม่มดขึ้นตามโหมดฮาโลวีน
+function setEyes(p, t, seed, asleep) {
+  const k = asleep ? 0.12 : (t + seed % 7) % 4.3 < 0.13 ? 0.12 : 1;
+  for (const e of p.eyes) e.scale.y = k;
+  if (p.hat) p.hat.visible = spooky;
+}
 function limb(parent, g, m, x, y, len) {
   const pivot = new THREE.Group(); pivot.position.set(x, y, 0); parent.add(pivot);
   const mesh = new THREE.Mesh(g, m); mesh.position.y = -len / 2; mesh.castShadow = true; pivot.add(mesh);
@@ -386,22 +406,89 @@ function makePerson(a) {
   const h = hash(a.id);
   const shirt = a.id.startsWith('npc:') ? new THREE.Color(a.shirt) : new THREE.Color().setHSL((h % 360) / 360, 0.65, 0.55);
   const shirtM = new THREE.MeshStandardMaterial({ color: shirt, roughness: 0.6 });
-  const skinM = mat(a.skin), hairM = mat(a.hair), pantsM = mat('#2a3045');
+  const shirtDark = new THREE.MeshStandardMaterial({ color: shirt.clone().multiplyScalar(0.72), roughness: 0.7 });
+  const skinM = mat(a.skin, { roughness: 0.55 }), hairM = mat(a.hair, { roughness: 0.5 }), pantsM = mat(PANTS[(h >>> 7) % PANTS.length]), shoeM = mat(SHOES[(h >>> 11) % SHOES.length], { roughness: 0.45 });
   const g = new THREE.Group(); root.add(g);
   g.scale.setScalar(1.35);
   const body = new THREE.Group(); g.add(body);
-  const legL = limb(body, geo.leg, pantsM, -0.11, 0.55, 0.5), legR = limb(body, geo.leg, pantsM, 0.11, 0.55, 0.5);
-  const torso = new THREE.Mesh(geo.body, shirtM); torso.position.y = 0.92; torso.castShadow = true; body.add(torso);
-  const armL = limb(body, geo.arm, shirtM, -0.38, 1.13, 0.46), armR = limb(body, geo.arm, shirtM, 0.38, 1.13, 0.46);
-  for (const arm of [armL, armR]) { const hd = new THREE.Mesh(geo.hand, skinM); hd.position.y = -0.48; arm.add(hd); }
-  const head = new THREE.Group(); head.position.y = 1.55; body.add(head);
+  // ขา + รองเท้า + สะโพก + เข็มขัด
+  const legL = limb(body, geo.leg, pantsM, -0.12, 0.55, 0.5), legR = limb(body, geo.leg, pantsM, 0.12, 0.55, 0.5);
+  for (const leg of [legL, legR]) piece(leg, geo.ball, shoeM, 0, -0.49, 0.045, 0.105, 0.065, 0.165, true);
+  piece(body, geo.ball, pantsM, 0, 0.66, 0, 0.245, 0.15, 0.195, true);
+  piece(body, geo.band, mat('#1d2130'), 0, 0.74, 0, 0.245, 0.05, 0.195);
+  // ลำตัว + คอ + คอเสื้อ
+  piece(body, geo.body, shirtM, 0, 0.98, 0, 1, 1, 0.8, true);
+  piece(body, geo.band, skinM, 0, 1.32, 0, 0.085, 0.14, 0.085);
+  piece(body, geo.collar, shirtDark, 0, 1.28, 0, 1, 1, 1).rotation.x = Math.PI / 2;
+  // ชุด 3 แบบ: เสื้อยืดลายแถบ · ฮู้ด · เชิ้ตผูกเน็กไท
+  const outfit = (h >>> 15) % 3;
+  if (outfit === 0) piece(body, geo.band, mat('#f2f3f7'), 0, 1.04, 0, 0.245, 0.05, 0.197);
+  else if (outfit === 1) {
+    piece(body, geo.ball, shirtDark, 0, 1.3, -0.15, 0.22, 0.16, 0.14, true);
+    for (const sx of [-0.05, 0.05]) piece(body, geo.cube, mat('#f2f3f7'), sx, 1.13, 0.19, 0.012, 0.13, 0.012);
+    piece(body, geo.cube, shirtDark, 0, 0.85, 0.185, 0.24, 0.1, 0.02);
+  } else {
+    piece(body, geo.cube, mat('#c8344a'), 0, 1.08, 0.195, 0.06, 0.25, 0.015);
+    piece(body, geo.cube, mat('#c8344a'), 0, 1.22, 0.19, 0.075, 0.05, 0.02);
+  }
+  // แขน: แขนเสื้อ + ท่อนแขน + มือ (จุดหมุนที่ไหล่)
+  const armL = limb(body, geo.sleeve, shirtM, -0.32, 1.17, 0.35), armR = limb(body, geo.sleeve, shirtM, 0.32, 1.17, 0.35);
+  for (const arm of [armL, armR]) {
+    piece(arm, geo.forearm, skinM, 0, -0.36, 0, 1, 1, 1, true);
+    piece(arm, geo.ball, skinM, 0, -0.5, 0, 0.075);
+  }
+  // หัว + หู + ผม 5 ทรง
+  const head = new THREE.Group(); head.position.y = 1.6; body.add(head);
   const skull = new THREE.Mesh(geo.head, skinM); skull.castShadow = true; head.add(skull);
-  const hair = new THREE.Mesh(geo.hair, hairM); hair.position.y = 0.03; hair.rotation.x = -0.25; head.add(hair);
-  if (a.style === 1) { const back = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.5, 0.18), hairM); back.position.set(0, -0.12, -0.22); head.add(back); }
-  if (a.style === 2) { const top = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), hairM); top.position.set(0, 0.33, -0.05); head.add(top); }
-  for (const ex of [-0.11, 0.11]) { const e = new THREE.Mesh(geo.eye, mat('#1a1a1a')); e.position.set(ex, 0.02, 0.3); head.add(e); }
-  if (a.glasses) { const gl = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.03, 0.03), mat('#222')); gl.position.set(0, 0.04, 0.31); head.add(gl); }
-  if (a.data.isSub) { const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.08, 16), mat('#ffc857')); cap.position.y = 0.28; head.add(cap); }
+  for (const sx of [-0.335, 0.335]) piece(head, geo.ball, skinM, sx, -0.01, 0, 0.06, 0.075, 0.05);
+  const hair = new THREE.Mesh(geo.hair, hairM); hair.position.y = 0.03; hair.rotation.x = -0.28; hair.castShadow = true; head.add(hair);
+  piece(head, geo.ball, hairM, 0.03, 0.2, 0.21, 0.24, 0.1, 0.13).rotation.z = -0.2;
+  const hairStyle = (h >>> 18) % 5;
+  if (hairStyle === 1) piece(head, geo.ball, hairM, 0, -0.1, -0.13, 0.36, 0.34, 0.25, true);
+  else if (hairStyle === 2) piece(head, geo.ball, hairM, 0, 0.42, -0.1, 0.13, 0.13, 0.13, true);
+  else if (hairStyle === 3) for (let i = 0; i < 6; i++) {
+    const sp = piece(head, geo.spike, hairM, Math.sin(i * 1.05) * 0.2, 0.36, -0.06 + Math.cos(i * 1.05) * 0.14);
+    sp.rotation.set(Math.cos(i * 1.05) * 0.5, 0, -Math.sin(i * 1.05) * 0.5);
+  } else if (hairStyle === 4) for (let i = 0; i < 9; i++) {
+    const k = i / 9 * Math.PI * 2;
+    piece(head, geo.ball, hairM, Math.cos(k) * 0.3, 0.17 + (i % 2) * 0.08, Math.sin(k) * 0.26 - 0.04, 0.12);
+  }
+  // หน้า: ตา (กะพริบได้) + คิ้ว + ปาก + แก้ม
+  const eyes = [];
+  for (const ex of [-0.12, 0.12]) {
+    const eye = new THREE.Group(); eye.position.set(ex, 0.02, 0.305); head.add(eye); eyes.push(eye);
+    piece(eye, geo.ball, mat('#ffffff', { roughness: 0.3 }), 0, 0, 0, 0.06, 0.072, 0.022);
+    piece(eye, geo.ball, mat('#1b1a24', { roughness: 0.2 }), 0, -0.004, 0.018, 0.038, 0.046, 0.012);
+    piece(eye, geo.ball, mat('#ffffff', { roughness: 0.2 }), 0.012, 0.018, 0.03, 0.012);
+    piece(head, geo.cube, hairM, ex, 0.115, 0.3, 0.09, 0.018, 0.02).rotation.z = ex > 0 ? -0.1 : 0.1;
+    const bl = piece(head, geo.blush, blushM, ex * 1.72, -0.075, 0.268); bl.rotation.y = ex > 0 ? 0.65 : -0.65;
+  }
+  piece(head, geo.smile, mat('#a8505a'), 0, -0.115, 0.315).rotation.z = Math.PI;
+  if (a.glasses) {
+    const frame = mat('#22242e', { roughness: 0.3, metalness: 0.5 });
+    for (const ex of [-0.12, 0.12]) piece(head, geo.rim, frame, ex, 0.02, 0.335);
+    piece(head, geo.cube, frame, 0, 0.03, 0.335, 0.1, 0.014, 0.014);
+  }
+  if (a.id.startsWith('npc:')) {                // เลขาฯ ใส่หูฟังคาดหัว
+    const dark = mat('#20222b', { roughness: 0.4 });
+    const bandTop = new THREE.Mesh(new THREE.TorusGeometry(0.375, 0.018, 6, 24, Math.PI), dark); bandTop.position.y = 0.02; head.add(bandTop);
+    for (const sx of [-0.365, 0.365]) piece(head, geo.ball, dark, sx, 0, 0, 0.05, 0.085, 0.085);
+    piece(head, geo.cube, dark, -0.3, -0.13, 0.18, 0.015, 0.015, 0.22).rotation.y = 0.55;
+  }
+  if (a.data.isSub) {                           // subagent ใส่หมวกแก๊ปสีเหลือง
+    const capM = mat('#ffc857', { roughness: 0.55 });
+    piece(head, geo.ball, capM, 0, 0.17, -0.02, 0.37, 0.25, 0.37, true);
+    piece(head, geo.band, capM, 0, 0.17, 0.32, 0.2, 0.025, 0.14);
+  }
+  let hat = null;
+  if (!a.data.isSub) {                          // หมวกแม่มดฮาโลวีน (subagent ใส่แก๊ปอยู่แล้ว)
+    const hatM = mat('#3a1f5c', { roughness: 0.7 });
+    hat = new THREE.Group(); hat.position.set(0, 0.33, -0.02); hat.rotation.x = -0.08; head.add(hat);
+    piece(hat, geo.band, hatM, 0, 0, 0, 0.44, 0.025, 0.44, true);
+    piece(hat, geo.hatCone, hatM, 0, 0.24, 0, 1, 1, 1, true);
+    piece(hat, geo.band, mat('#ff8a1f', { emissive: '#ff8a1f', emissiveIntensity: 0.3 }), 0, 0.055, 0, 0.235, 0.05, 0.235);
+    hat.visible = spooky;
+  }
   const ringM = new THREE.MeshBasicMaterial({ color: '#ffc857', transparent: true, opacity: 0.95, side: THREE.DoubleSide, toneMapped: false });
   const discM = new THREE.MeshBasicMaterial({ color: '#ffc857', transparent: true, opacity: 0.16, depthWrite: false, toneMapped: false });
   const ring = new THREE.Mesh(geo.ring, ringM); ring.rotation.x = -Math.PI / 2; ring.position.y = 0.03; g.add(ring);
@@ -411,7 +498,7 @@ function makePerson(a) {
   const lbl = document.createElement('div'); lbl.className = 'lbl'; lbl.dataset.id = a.id;
   lbl.innerHTML = '<div class="bub"></div><div class="pill"><i></i><b></b><small></small></div>';
   labels.appendChild(lbl);
-  return { g, body, legL, legR, armL, armR, head, ringM, discM, ring, lbl, yaw: 0, key: '' };
+  return { g, body, legL, legR, armL, armR, head, eyes, hat, ringM, discM, ring, lbl, yaw: 0, key: '' };
 }
 labels.addEventListener('click', e => {
   const el = e.target.closest('.lbl'); if (!el) return;
@@ -455,6 +542,7 @@ function updatePeople(t, now) {
     else { p.armL.rotation.x = -swing; p.armR.rotation.x = swing; }
     p.head.rotation.x = s.state === 'away' ? 0.35 : 0;
     p.head.rotation.y = s.state === 'thinking' && !moving ? Math.sin(t * 1.5) * 0.3 : 0;
+    setEyes(p, t, hash(a.id), s.state === 'away');
 
     const col = STATE_COLOR[s.state] || '#7aa2ff';
     p.ringM.color.set(col); p.discM.color.set(col);
@@ -462,7 +550,7 @@ function updatePeople(t, now) {
     p.ring.scale.setScalar(selected === a.id ? 1.25 : pulse);
 
     // ป้ายชื่อ + กรอบข้อความ (HTML ทับบนภาพ 3D)
-    v3.set(x, sit ? 2.55 : 2.85, z).project(camera);
+    v3.set(x, (sit ? 2.55 : 2.85) + (spooky && !s.isSub ? 0.5 : 0), z).project(camera);
     const off = v3.z > 1 || v3.x < -1.1 || v3.x > 1.1 || v3.y < -1.1 || v3.y > 1.1;
     p.lbl.style.display = off ? 'none' : '';
     p.lbl.style.left = ((v3.x + 1) / 2 * cw) + 'px';
@@ -503,12 +591,13 @@ function updateNpc(o, t, cw, ch) {
   const gotMail = [...actors.values()].some(a => a.delivery && a.data.account === o.acc.id);
   npc.body.position.y = -0.08 + Math.sin(t * 2) * 0.01;
   npc.head.rotation.y = Math.sin(t * 0.7) * 0.25;
+  setEyes(npc, t, hash(o.acc.id), false);
   npc.armL.rotation.x = gotMail ? -1.15 + Math.sin(t * 22) * 0.08 : -0.55 + Math.sin(t * 1.3) * 0.05;
   npc.armR.rotation.x = gotMail ? -1.15 + Math.cos(t * 22) * 0.08 : -0.55 + Math.cos(t * 1.3) * 0.05;
   const col = n ? '#ff6b6b' : '#3ddc97';
   npc.ringM.color.set(col); npc.discM.color.set(col);
   npc.ring.scale.setScalar(n ? 1 + Math.sin(t * 4) * 0.08 : 1);
-  v3.set(NPC.x / T + ox, 2.55, NPC.y / T).project(camera);
+  v3.set(NPC.x / T + ox, spooky ? 3.05 : 2.55, NPC.y / T).project(camera);
   const off = v3.z > 1 || v3.x < -1.1 || v3.x > 1.1 || v3.y < -1.1 || v3.y > 1.1;
   npc.lbl.style.display = off ? 'none' : '';
   npc.lbl.style.left = ((v3.x + 1) / 2 * cw) + 'px';
@@ -524,14 +613,83 @@ function updateNpc(o, t, cw, ch) {
   }
 }
 
-// แมว
-const catG = new THREE.Group(); root.add(catG);
-box(0.55, 0.28, 0.25, '#e08a3a', 0, 0.12, 0, catG);
-box(0.26, 0.24, 0.24, '#e08a3a', 0.33, 0.3, 0, catG);
-box(0.06, 0.1, 0.06, '#e08a3a', 0.3, 0.54, 0.07, catG); box(0.06, 0.1, 0.06, '#e08a3a', 0.3, 0.54, -0.07, catG);
-const tail = box(0.06, 0.35, 0.06, '#c06a2a', -0.3, 0.3, 0, catG); tail.rotation.z = 0.5;
-for (const [lx, lz] of [[-0.18, -0.08], [-0.18, 0.08], [0.18, -0.08], [0.18, 0.08]]) box(0.07, 0.14, 0.07, '#c06a2a', lx, 0, lz, catG, false);
-let catYaw = 0;
+// แมว — โมเดลหันหน้า +x · สร้างครั้งแรกที่ตึกของแมวตัวนั้นมีอยู่
+const catGeo = { ear: new THREE.ConeGeometry(0.055, 0.12, 6), leg: new THREE.CapsuleGeometry(0.035, 0.13, 3, 6), tail: new THREE.CapsuleGeometry(0.03, 0.2, 3, 6) };
+function makeCat3d(c) {
+  const { fur, dark, mark, eye } = c.kind, furM = mat(fur, { roughness: 0.85 }), darkM = mat(dark, { roughness: 0.85 });
+  const g = new THREE.Group(); root.add(g); g.scale.setScalar(c.kit ? 0.72 : 1.05);
+  const torso = new THREE.Group(); torso.position.set(-0.18, 0.2, 0); g.add(torso);   // หมุนรอบสะโพกตอนนั่ง
+  const belly = piece(torso, geo.ball, furM, 0.18, 0.09, 0, 0.32, 0.135, 0.15, true);
+  const head = new THREE.Group(); head.position.set(0.5, 0.22, 0); torso.add(head);
+  piece(head, geo.ball, furM, 0, 0, 0, 0.135, 0.125, 0.14, true);
+  for (const z of [-0.08, 0.08]) {
+    piece(head, catGeo.ear, furM, -0.01, 0.135, z);
+  }
+  const eyes = [];
+  for (const z of [-0.055, 0.055]) {
+    const e = new THREE.Group(); e.position.set(0.118, 0.025, z); head.add(e); eyes.push(e);
+    piece(e, geo.ball, mat(eye, { roughness: 0.2, emissive: eye, emissiveIntensity: 0.25 }), 0, 0, 0, 0.018, 0.028, 0.028);
+    piece(e, geo.ball, mat('#111', { roughness: 0.2 }), 0.012, 0, 0, 0.01, 0.022, 0.009);
+  }
+  piece(head, geo.ball, mat('#ff9aa8'), 0.137, -0.018, 0, 0.012, 0.01, 0.014);
+  for (const z of [-1, 1]) for (const y of [-0.025, -0.045]) {     // หนวด
+    piece(head, geo.cube, mat('#e9edf5'), 0.115, y, z * 0.105, 0.006, 0.006, 0.1);
+  }
+  if (mark === 'tabby') for (const x of [0.02, 0.15, 0.28]) piece(torso, geo.ball, darkM, x, 0.2, 0, 0.035, 0.03, 0.12);
+  if (mark === 'tuxedo') piece(torso, geo.ball, mat('#f2f3f7', { roughness: 0.85 }), 0.42, 0.04, 0, 0.09, 0.085, 0.09);
+  if (mark === 'calico') {
+    piece(torso, geo.ball, mat('#e08a3a', { roughness: 0.85 }), 0.05, 0.17, 0.05, 0.12, 0.07, 0.1);
+    piece(torso, geo.ball, mat('#3a3034', { roughness: 0.85 }), 0.3, 0.17, -0.04, 0.09, 0.06, 0.09);
+    piece(head, geo.ball, mat('#3a3034', { roughness: 0.85 }), -0.02, 0.08, 0.06, 0.08, 0.05, 0.07);
+  }
+  const legs = [];
+  for (const [x, z] of [[-0.02, -0.08], [-0.02, 0.08], [0.33, -0.08], [0.33, 0.08]]) {
+    const pivot = new THREE.Group(); pivot.position.set(x, 0.05, z); torso.add(pivot);
+    piece(pivot, catGeo.leg, furM, 0, -0.1, 0, 1, 1, 1, true);
+    piece(pivot, geo.ball, darkM, 0.01, -0.2, 0, 0.04, 0.025, 0.04);
+    legs.push(pivot);
+  }
+  const tail = new THREE.Group(); tail.position.set(-0.12, 0.13, 0); torso.add(tail);
+  piece(tail, catGeo.tail, darkM, 0, 0.13, 0);
+  const tip = new THREE.Group(); tip.position.y = 0.26; tail.add(tip);
+  piece(tip, catGeo.tail, darkM, 0, 0.12, 0);
+  return { g, torso, belly, head, eyes, legs, tail, tip, yaw: 0, seed: hash(c.slot + ':' + c.kind.fur) % 100 };
+}
+const cat3d = new Map();
+function updateCats3d(t) {
+  const slots = new Set(accounts().map(a => a.slot));
+  for (const c of cats) {
+    let m = cat3d.get(c);
+    if (!slots.has(c.slot)) { if (m) m.g.visible = false; continue; }
+    if (!m) { m = makeCat3d(c); cat3d.set(c, m); }
+    m.g.visible = true;
+    m.g.position.set(c.x / T + c.slot * LOT_W, 0, c.y / T);
+    if (c.pose === 'walk') m.yaw = turn(m.yaw, Math.atan2(-(c.ty - c.y), c.tx - c.x), 0.15);
+    m.g.rotation.y = m.yaw;
+    const ph = t + m.seed;
+    const breathe = 1 + Math.sin(ph * 2) * 0.03;
+    m.belly.scale.y = 0.135 * breathe;
+    if (c.pose === 'walk') {
+      const k = Math.sin(c.walk * 2) * 0.55;
+      m.torso.rotation.z = 0; m.torso.position.y = 0.2 + Math.abs(Math.sin(c.walk * 2)) * 0.012;
+      m.legs.forEach((l, i) => { l.scale.y = 1; l.rotation.z = i === 0 || i === 3 ? k : -k; });
+      m.head.rotation.set(0, 0, 0);
+      m.tail.rotation.z = 0.35; m.tip.rotation.z = Math.sin(ph * 5) * 0.35;
+    } else if (c.pose === 'sit') {
+      m.torso.rotation.z = 0.72; m.torso.position.y = 0.12;
+      m.legs.forEach((l, i) => { l.scale.y = i < 2 ? 0.45 : 0.95; l.rotation.z = -0.72; });
+      m.head.rotation.set(0, Math.sin(ph * 0.5) * 0.45, -0.72);
+      m.tail.rotation.z = 1.5; m.tip.rotation.z = -0.25 + Math.sin(ph * 1.6) * 0.3;
+    } else {                                   // นอนขด
+      m.torso.rotation.z = 0; m.torso.position.y = 0.055;
+      m.legs.forEach(l => { l.scale.y = 0.22; l.rotation.z = 0; });
+      m.head.rotation.set(0.25, 0, -0.45);
+      m.tail.rotation.z = 1.9; m.tip.rotation.z = 0.8;
+    }
+    const closed = c.pose === 'sleep' || (ph % 5) < 0.14;
+    for (const e of m.eyes) e.scale.y = closed ? 0.12 : 1;
+  }
+}
 
 // ---------- จอ / ไฟ ที่ขยับได้ ----------
 function drawDeskScreen(s, owner, t) {
@@ -561,17 +719,18 @@ function drawBrowser(s, i, on, t) {
 }
 
 // ---------- กลางวัน / กลางคืน ----------
-let nightNow = null;
+let nightNow = null, moodSpooky = null;
 function applyMood() {
   const hr = new Date().getHours();
   const night = dayMode === 'night' || (dayMode === 'auto' && (hr < 6 || hr >= 18));
-  if (night === nightNow) return;
-  nightNow = night;
-  scene.background = new THREE.Color(night ? '#060914' : '#0d1428');
-  hemi.intensity = night ? 0.45 : 1.8;
-  hemi.color.set(night ? '#6b7bd6' : '#d6e2ff');
-  sun.intensity = night ? 0.3 : 2.6;
-  sun.color.set(night ? '#8fa0ff' : '#fff3e0');
+  if (night === nightNow && spooky === moodSpooky) return;
+  nightNow = night; moodSpooky = spooky;
+  // ฮาโลวีน: ท้องฟ้าม่วง แสงอุ่นและหม่นลง
+  scene.background = new THREE.Color(spooky ? (night ? '#0d0618' : '#1c0f30') : night ? '#060914' : '#0d1428');
+  hemi.intensity = night ? 0.45 : spooky ? 1.15 : 1.8;
+  hemi.color.set(night ? (spooky ? '#8a68d6' : '#6b7bd6') : spooky ? '#cdb8ff' : '#d6e2ff');
+  sun.intensity = night ? 0.3 : spooky ? 1.9 : 2.6;
+  sun.color.set(night ? '#8fa0ff' : spooky ? '#ffcf9e' : '#fff3e0');
   for (const l of roomLights) l.intensity = night ? 25 : 0;
   for (const o of offices.values()) for (const w of o.windows) w.material.color.set(night ? '#1a2356' : '#8fd0ff');
   railMat.emissiveIntensity = night ? 3 : 1.6;
@@ -613,7 +772,7 @@ renderer.domElement.addEventListener('pointerup', e => {
 
 // ---------- ลูป ----------
 const clock = new THREE.Clock();
-let lastSlow = 0, lastCat = { x: cat.x, y: cat.y };
+let lastSlow = 0;
 function loop() {
   requestAnimationFrame(loop);
   if (view !== '3d') return;
@@ -627,11 +786,7 @@ function loop() {
   applyMood();
   updatePeople(t, now);
 
-  const cdx = cat.x - lastCat.x, cdy = cat.y - lastCat.y;
-  if (cdx * cdx + cdy * cdy > 0.01) catYaw = Math.atan2(-cdy, cdx);
-  lastCat = { x: cat.x, y: cat.y };
-  catG.position.set(cat.x / T, 0, cat.y / T); catG.rotation.y = catYaw;
-  tail.rotation.z = 0.5 + Math.sin(t * 3) * 0.25;
+  updateCats3d(t);
 
   if (now - lastSlow > 200) {
     lastSlow = now;
@@ -659,11 +814,15 @@ function loop() {
     }
   }
   outdoor?.update?.(t, now);
+  spookyDecor?.update?.(t);
   renderer.render(scene, camera);
 }
 
 // บรรยากาศนอกตึก (ถนน รถ ต้นไม้) แยกไว้ใน outdoor3d.js
 const outdoor = await import('./outdoor3d.js').catch(e => { console.warn('outdoor3d', e); return null; });
 outdoor?.setup?.({ THREE, scene, world: root, mat, glow, box, cyl, canvasTex, W3, H3, isNight: () => !!nightNow });
+// ของตกแต่งฮาโลวีน แยกไว้ใน halloween3d.js
+const spookyDecor = await import('./halloween3d.js').catch(e => { console.warn('halloween3d', e); return null; });
+spookyDecor?.setup?.({ THREE, mat, canvasTex });
 resize3d();
 loop();

@@ -1,0 +1,7 @@
+# ข้อมูลเฉพาะเครื่อง / ความลับ
+hq-token.txt
+hq-sessions.json
+hq-names.json
+hq-accounts.json
+hq-uploads/
+node_modules/
